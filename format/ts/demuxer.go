@@ -3,13 +3,15 @@ package ts
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"time"
-	"github.com/nareix/joy4/utils/bits/pio"
+
 	"github.com/nareix/joy4/av"
-	"github.com/nareix/joy4/format/ts/tsio"
 	"github.com/nareix/joy4/codec/aacparser"
 	"github.com/nareix/joy4/codec/h264parser"
-	"io"
+	"github.com/nareix/joy4/codec/opusparser"
+	"github.com/nareix/joy4/format/ts/tsio"
+	"github.com/nareix/joy4/utils/bits/pio"
 )
 
 type Demuxer struct {
@@ -106,9 +108,9 @@ func (self *Demuxer) initPMT(payload []byte) (err error) {
 	}
 
 	self.streams = []*Stream{}
-	for i, info := range self.pmt.ElementaryStreamInfos {
+	for _, info := range self.pmt.ElementaryStreamInfos {
 		stream := &Stream{}
-		stream.idx = i
+		stream.idx = len(self.streams)
 		stream.demuxer = self
 		stream.pid = info.ElementaryPID
 		stream.streamType = info.StreamType
@@ -117,6 +119,16 @@ func (self *Demuxer) initPMT(payload []byte) (err error) {
 			self.streams = append(self.streams, stream)
 		case tsio.ElementaryStreamTypeAdtsAAC:
 			self.streams = append(self.streams, stream)
+		case tsio.ElementaryStreamTypeTabled:
+			for _, desc := range info.Descriptors {
+				if desc.Tag == tsio.TagPrivateRegistration && len(desc.Data) == 4 {
+					stream.streamTag = pio.U32BE(desc.Data)
+					switch stream.streamTag {
+					case tsio.StreamTagOpus:
+						self.streams = append(self.streams, stream)
+					}
+				}
+			}
 		}
 	}
 	return
@@ -262,6 +274,14 @@ func (self *Stream) payloadEnd() (n int, err error) {
 				return
 			}
 		}
+
+	case tsio.ElementaryStreamTypeTabled:
+		if self.CodecData == nil {
+			self.CodecData = opusparser.NewCodecData(opusparser.Channels(payload))
+		}
+		delta, _ := opusparser.PacketDuration(payload)
+		self.addPacket(payload, delta)
+		n++
 	}
 
 	return

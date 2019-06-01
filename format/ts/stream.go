@@ -15,6 +15,7 @@ type Stream struct {
 	pid    uint16
 	streamId   uint8
 	streamType uint8
+	streamTag  uint32
 
 	tsw       *tsio.TSWriter
 	idx  int

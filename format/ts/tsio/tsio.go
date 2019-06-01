@@ -12,6 +12,7 @@ import (
 const (
 	StreamIdH264 = 0xe0
 	StreamIdAAC  = 0xc0
+	StreamIDOpus = 0xc1
 )
 
 const (
@@ -34,9 +35,14 @@ var ErrParsePMT = fmt.Errorf("invalid PMT")
 var ErrParsePAT = fmt.Errorf("invalid PAT")
 
 const (
+	ElementaryStreamTypeTabled  = 0x06
 	ElementaryStreamTypeH264    = 0x1B
 	ElementaryStreamTypeAdtsAAC = 0x0F
 )
+
+const TagPrivateRegistration = 0x05
+
+const StreamTagOpus = 0x4f707573
 
 type PATEntry struct {
 	ProgramNumber uint16
@@ -194,7 +200,7 @@ func (self PMT) parseDescs(b []byte) (descs []Descriptor, err error) {
 			desc.Tag = b[n]
 			desc.Data = make([]byte, b[n+1])
 			n += 2
-			if n+len(desc.Data) < len(b) {
+			if n+len(desc.Data) <= len(b) {
 				copy(desc.Data, b[n:])
 				descs = append(descs, desc)
 				n += len(desc.Data)

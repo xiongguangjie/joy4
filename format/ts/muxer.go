@@ -2,15 +2,21 @@ package ts
 
 import (
 	"fmt"
+	"io"
+	"time"
+
 	"github.com/nareix/joy4/av"
 	"github.com/nareix/joy4/codec/aacparser"
 	"github.com/nareix/joy4/codec/h264parser"
 	"github.com/nareix/joy4/format/ts/tsio"
-	"io"
-	"time"
+	"github.com/nareix/joy4/utils/bits/pio"
 )
 
-var CodecTypes = []av.CodecType{av.H264, av.AAC}
+var CodecTypes = []av.CodecType{
+	av.H264,
+	av.AAC,
+	av.OPUS,
+}
 
 type Muxer struct {
 	w                        io.Writer
@@ -116,6 +122,14 @@ func (self *Muxer) WritePATPMT() (err error) {
 				StreamType:    tsio.ElementaryStreamTypeH264,
 				ElementaryPID: stream.pid,
 			})
+		case av.OPUS:
+			streamTag := make([]byte, 4)
+			pio.PutU32BE(streamTag, tsio.StreamTagOpus)
+			elemStreams = append(elemStreams, tsio.ElementaryStreamInfo{
+				StreamType:    tsio.ElementaryStreamTypeTabled,
+				ElementaryPID: stream.pid,
+				Descriptors:   []tsio.Descriptor{{Tag: tsio.TagPrivateRegistration, Data: streamTag}},
+			})
 		}
 	}
 
@@ -199,6 +213,12 @@ func (self *Muxer) WritePacket(pkt av.Packet) (err error) {
 		if err = stream.tsw.WritePackets(self.w, datav, pkt.Time, pkt.IsKeyFrame, false); err != nil {
 			return
 		}
+
+	case av.OPUS:
+		n := tsio.FillPESHeader(self.peshdr, tsio.StreamIDOpus, len(pkt.Data), pkt.Time, 0)
+		self.datav[0] = self.peshdr[:n]
+		self.datav[1] = pkt.Data
+		err = stream.tsw.WritePackets(self.w, self.datav[:2], pkt.Time, true, false)
 	}
 
 	return
