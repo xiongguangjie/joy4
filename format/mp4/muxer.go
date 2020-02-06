@@ -172,7 +172,9 @@ func (self *Muxer) WriteHeader(streams []av.CodecData) (err error) {
 func (self *Muxer) WritePacket(pkt av.Packet) (err error) {
 	stream := self.streams[pkt.Idx]
 	if stream.lastpkt != nil {
-		if err = stream.writePacket(*stream.lastpkt, pkt.Time-stream.lastpkt.Time); err != nil {
+		writePkt := *stream.lastpkt
+		dts, pts := stream.calculateTs(writePkt)
+		if err = stream.writePacket(writePkt, dts, pts); err != nil {
 			return
 		}
 	}
@@ -180,12 +182,7 @@ func (self *Muxer) WritePacket(pkt av.Packet) (err error) {
 	return
 }
 
-func (self *Stream) writePacket(pkt av.Packet, rawdur time.Duration) (err error) {
-	if rawdur < 0 {
-		err = fmt.Errorf("mp4: stream#%d time=%v < lasttime=%v", pkt.Idx, pkt.Time, self.lastpkt.Time)
-		return
-	}
-
+func (self *Stream) writePacket(pkt av.Packet, dts int64, pts int64) (err error) {
 	if _, err = self.muxer.bufw.Write(pkt.Data); err != nil {
 		return
 	}
@@ -194,7 +191,10 @@ func (self *Stream) writePacket(pkt av.Packet, rawdur time.Duration) (err error)
 		self.sample.SyncSample.Entries = append(self.sample.SyncSample.Entries, uint32(self.sampleIndex+1))
 	}
 
-	duration := uint32(self.timeToTs(rawdur))
+	duration := uint32(dts - self.lastMuxDTS)
+	if self.hasLastMuxDTS && dts == 0 && pts == 0 {
+		duration = 0 // for trailer
+	}
 	if self.sttsEntry == nil || duration != self.sttsEntry.Duration {
 		self.sample.TimeToSample.Entries = append(self.sample.TimeToSample.Entries, mp4io.TimeToSampleEntry{Duration: duration})
 		self.sttsEntry = &self.sample.TimeToSample.Entries[len(self.sample.TimeToSample.Entries)-1]
@@ -202,7 +202,7 @@ func (self *Stream) writePacket(pkt av.Packet, rawdur time.Duration) (err error)
 	self.sttsEntry.Count++
 
 	if self.sample.CompositionOffset != nil {
-		offset := uint32(self.timeToTs(pkt.CompositionTime))
+		offset := uint32(pts - dts)
 		if self.cttsEntry == nil || offset != self.cttsEntry.Offset {
 			table := self.sample.CompositionOffset
 			table.Entries = append(table.Entries, mp4io.CompositionOffsetEntry{Offset: offset})
@@ -217,13 +217,48 @@ func (self *Stream) writePacket(pkt av.Packet, rawdur time.Duration) (err error)
 	self.sample.SampleSize.Entries = append(self.sample.SampleSize.Entries, uint32(len(pkt.Data)))
 
 	self.muxer.wpos += int64(len(pkt.Data))
+
+	self.lastMuxDTS = dts
+	self.hasLastMuxDTS = true
 	return
+}
+
+func (self *Stream) calculateTs(pkt av.Packet) (dts int64, pts int64) {
+	dts = self.timeToTs(pkt.Time)
+	pts = dts + self.timeToTs(pkt.CompositionTime)
+	minDTS := self.lastMuxDTS + 1
+	if dts > pts {
+		min := pts
+		if dts < min {
+			min = dts
+		}
+		if minDTS < min {
+			min = minDTS
+		}
+		max := pts
+		if dts > max {
+			max = dts
+		}
+		if minDTS > max {
+			max = minDTS
+		}
+		newPTS := pts + dts + minDTS - min - max
+		pts = newPTS
+		dts = newPTS
+	}
+	if self.hasLastMuxDTS && dts < minDTS {
+		if pts >= dts && minDTS > pts {
+			pts = minDTS
+		}
+		dts = minDTS
+	}
+	return dts, pts
 }
 
 func (self *Muxer) WriteTrailer() (err error) {
 	for _, stream := range self.streams {
 		if stream.lastpkt != nil {
-			if err = stream.writePacket(*stream.lastpkt, 0); err != nil {
+			if err = stream.writePacket(*stream.lastpkt, 0, 0); err != nil {
 				return
 			}
 			stream.lastpkt = nil
