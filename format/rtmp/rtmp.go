@@ -8,11 +8,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"github.com/nareix/joy4/utils/bits/pio"
 	"github.com/nareix/joy4/av"
 	"github.com/nareix/joy4/av/avutil"
 	"github.com/nareix/joy4/format/flv"
 	"github.com/nareix/joy4/format/flv/flvio"
+	"github.com/nareix/joy4/utils/bits/pio"
 	"io"
 	"net"
 	"net/url"
@@ -867,7 +867,7 @@ func (self *Conn) WritePacket(pkt av.Packet) (err error) {
 	if err = self.writeAVTag(tag, int32(timestamp)); err != nil {
 		return
 	}
-
+	self.flushWrite()
 	return
 }
 
