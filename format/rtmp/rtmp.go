@@ -889,7 +889,7 @@ func (self *Conn) WriteHeader(streams []av.CodecData) (err error) {
 	}
 
 	// > onMetaData()
-	if err = self.writeDataMsg(5, self.avmsgsid, "onMetaData", metadata); err != nil {
+	if err = self.writeDataMsg(5, self.avmsgsid, "@setDataFrame", "onMetaData", metadata); err != nil {
 		return
 	}
 
