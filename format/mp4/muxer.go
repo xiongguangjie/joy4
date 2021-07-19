@@ -1,27 +1,28 @@
 package mp4
 
 import (
+	"bufio"
 	"fmt"
-	"time"
 	"github.com/nareix/joy4/av"
 	"github.com/nareix/joy4/codec/aacparser"
 	"github.com/nareix/joy4/codec/h264parser"
 	"github.com/nareix/joy4/format/mp4/mp4io"
 	"github.com/nareix/joy4/utils/bits/pio"
 	"io"
-	"bufio"
+	"math"
+	"time"
 )
 
 type Muxer struct {
-	w          io.WriteSeeker
-	bufw       *bufio.Writer
-	wpos       int64
-	streams    []*Stream
+	w       io.WriteSeeker
+	bufw    *bufio.Writer
+	wpos    int64
+	streams []*Stream
 }
 
 func NewMuxer(w io.WriteSeeker) *Muxer {
 	return &Muxer{
-		w: w,
+		w:    w,
 		bufw: bufio.NewWriterSize(w, pio.RecommendBufioSize),
 	}
 }
@@ -54,7 +55,7 @@ func (self *Muxer) newStream(codec av.CodecData) (err error) {
 
 	stream.trackAtom = &mp4io.Track{
 		Header: &mp4io.TrackHeader{
-			TrackId:  int32(len(self.streams)+1),
+			TrackId:  int32(len(self.streams) + 1),
 			Flags:    0x0003, // Track enabled | Track in movie
 			Duration: 0,      // fill later
 			Matrix:   [9]int32{0x10000, 0, 0, 0, 0x10000, 0, 0, 0, 0x40000000},
@@ -109,7 +110,7 @@ func (self *Stream) fillTrackAtom() (err error) {
 			Conf:                 &mp4io.AVC1Conf{Data: codec.AVCDecoderConfRecordBytes()},
 		}
 		self.trackAtom.Media.Handler = &mp4io.HandlerRefer{
-			SubType: [4]byte{'v','i','d','e'},
+			SubType: [4]byte{'v', 'i', 'd', 'e'},
 			Name:    []byte("Video Media Handler"),
 		}
 		self.trackAtom.Media.Info.Video = &mp4io.VideoMediaInfo{
@@ -132,7 +133,7 @@ func (self *Stream) fillTrackAtom() (err error) {
 		self.trackAtom.Header.Volume = 1
 		self.trackAtom.Header.AlternateGroup = 1
 		self.trackAtom.Media.Handler = &mp4io.HandlerRefer{
-			SubType: [4]byte{'s','o','u','n'},
+			SubType: [4]byte{'s', 'o', 'u', 'n'},
 			Name:    []byte("Sound Handler"),
 		}
 		self.trackAtom.Media.Info.Sound = &mp4io.SoundMediaInfo{}
@@ -152,12 +153,13 @@ func (self *Muxer) WriteHeader(streams []av.CodecData) (err error) {
 		}
 	}
 
-	taghdr := make([]byte, 8)
+	taghdr := make([]byte, 16)
+	pio.PutU32BE(taghdr, 1) // wide atom
 	pio.PutU32BE(taghdr[4:], uint32(mp4io.MDAT))
 	if _, err = self.w.Write(taghdr); err != nil {
 		return
 	}
-	self.wpos += 8
+	self.wpos += 16
 
 	for _, stream := range self.streams {
 		if stream.Type().IsVideo() {
@@ -170,7 +172,9 @@ func (self *Muxer) WriteHeader(streams []av.CodecData) (err error) {
 func (self *Muxer) WritePacket(pkt av.Packet) (err error) {
 	stream := self.streams[pkt.Idx]
 	if stream.lastpkt != nil {
-		if err = stream.writePacket(*stream.lastpkt, pkt.Time-stream.lastpkt.Time); err != nil {
+		writePkt := *stream.lastpkt
+		dts, pts := stream.calculateTs(writePkt)
+		if err = stream.writePacket(writePkt, dts, pts); err != nil {
 			return
 		}
 	}
@@ -178,12 +182,7 @@ func (self *Muxer) WritePacket(pkt av.Packet) (err error) {
 	return
 }
 
-func (self *Stream) writePacket(pkt av.Packet, rawdur time.Duration) (err error) {
-	if rawdur < 0 {
-		err = fmt.Errorf("mp4: stream#%d time=%v < lasttime=%v", pkt.Idx, pkt.Time, self.lastpkt.Time)
-		return
-	}
-
+func (self *Stream) writePacket(pkt av.Packet, dts int64, pts int64) (err error) {
 	if _, err = self.muxer.bufw.Write(pkt.Data); err != nil {
 		return
 	}
@@ -192,7 +191,10 @@ func (self *Stream) writePacket(pkt av.Packet, rawdur time.Duration) (err error)
 		self.sample.SyncSample.Entries = append(self.sample.SyncSample.Entries, uint32(self.sampleIndex+1))
 	}
 
-	duration := uint32(self.timeToTs(rawdur))
+	duration := uint32(dts - self.lastMuxDTS)
+	if self.hasLastMuxDTS && dts == 0 && pts == 0 {
+		duration = 0 // for trailer
+	}
 	if self.sttsEntry == nil || duration != self.sttsEntry.Duration {
 		self.sample.TimeToSample.Entries = append(self.sample.TimeToSample.Entries, mp4io.TimeToSampleEntry{Duration: duration})
 		self.sttsEntry = &self.sample.TimeToSample.Entries[len(self.sample.TimeToSample.Entries)-1]
@@ -200,7 +202,7 @@ func (self *Stream) writePacket(pkt av.Packet, rawdur time.Duration) (err error)
 	self.sttsEntry.Count++
 
 	if self.sample.CompositionOffset != nil {
-		offset := uint32(self.timeToTs(pkt.CompositionTime))
+		offset := uint32(pts - dts)
 		if self.cttsEntry == nil || offset != self.cttsEntry.Offset {
 			table := self.sample.CompositionOffset
 			table.Entries = append(table.Entries, mp4io.CompositionOffsetEntry{Offset: offset})
@@ -211,17 +213,52 @@ func (self *Stream) writePacket(pkt av.Packet, rawdur time.Duration) (err error)
 
 	self.duration += int64(duration)
 	self.sampleIndex++
-	self.sample.ChunkOffset.Entries = append(self.sample.ChunkOffset.Entries, uint32(self.muxer.wpos))
+	self.sample.ChunkOffset.Entries = append(self.sample.ChunkOffset.Entries, self.muxer.wpos)
 	self.sample.SampleSize.Entries = append(self.sample.SampleSize.Entries, uint32(len(pkt.Data)))
 
 	self.muxer.wpos += int64(len(pkt.Data))
+
+	self.lastMuxDTS = dts
+	self.hasLastMuxDTS = true
 	return
+}
+
+func (self *Stream) calculateTs(pkt av.Packet) (dts int64, pts int64) {
+	dts = self.timeToTs(pkt.Time)
+	pts = dts + self.timeToTs(pkt.CompositionTime)
+	minDTS := self.lastMuxDTS + 1
+	if dts > pts {
+		min := pts
+		if dts < min {
+			min = dts
+		}
+		if minDTS < min {
+			min = minDTS
+		}
+		max := pts
+		if dts > max {
+			max = dts
+		}
+		if minDTS > max {
+			max = minDTS
+		}
+		newPTS := pts + dts + minDTS - min - max
+		pts = newPTS
+		dts = newPTS
+	}
+	if self.hasLastMuxDTS && dts < minDTS {
+		if pts >= dts && minDTS > pts {
+			pts = minDTS
+		}
+		dts = minDTS
+	}
+	return dts, pts
 }
 
 func (self *Muxer) WriteTrailer() (err error) {
 	for _, stream := range self.streams {
 		if stream.lastpkt != nil {
-			if err = stream.writePacket(*stream.lastpkt, 0); err != nil {
+			if err = stream.writePacket(*stream.lastpkt, 0, 0); err != nil {
 				return
 			}
 			stream.lastpkt = nil
@@ -257,19 +294,25 @@ func (self *Muxer) WriteTrailer() (err error) {
 	}
 
 	var mdatsize int64
-	if mdatsize, err = self.w.Seek(0, 1); err != nil {
+	if mdatsize, err = self.w.Seek(0, io.SeekCurrent); err != nil {
 		return
 	}
-	if _, err = self.w.Seek(0, 0); err != nil {
+	if _, err = self.w.Seek(8, io.SeekStart); err != nil {
 		return
 	}
-	taghdr := make([]byte, 4)
-	pio.PutU32BE(taghdr, uint32(mdatsize))
+	taghdr := make([]byte, 8)
+	pio.PutU64BE(taghdr, uint64(mdatsize))
 	if _, err = self.w.Write(taghdr); err != nil {
 		return
 	}
 
-	if _, err = self.w.Seek(0, 2); err != nil {
+	if mdatsize > math.MaxUint32 {
+		for _, stream := range self.streams {
+			stream.sample.ChunkOffset.Is64bit = true
+		}
+	}
+
+	if _, err = self.w.Seek(0, io.SeekEnd); err != nil {
 		return
 	}
 	b := make([]byte, moov.Len())
