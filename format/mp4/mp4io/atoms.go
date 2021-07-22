@@ -792,8 +792,17 @@ func (self HandlerRefer) marshal(b []byte) (n int) {
 	n += len(self.Type[:])
 	copy(b[n:], self.SubType[:])
 	n += len(self.SubType[:])
+	pio.PutU32BE(b[n:],0)
+	n += 4
+	pio.PutU32BE(b[n:],0)
+	n += 4
+	pio.PutU32BE(b[n:],0)
+	n += 4
 	copy(b[n:], self.Name[:])
 	n += len(self.Name[:])
+
+	b[n] = 0
+	n += 1
 	return
 }
 func (self HandlerRefer) Len() (n int) {
@@ -802,7 +811,10 @@ func (self HandlerRefer) Len() (n int) {
 	n += 3
 	n += len(self.Type[:])
 	n += len(self.SubType[:])
-	n += len(self.Name[:])
+	n += 4
+	n += 4
+	n += 4
+	n += len(self.Name[:])+1
 	return
 }
 func (self *HandlerRefer) Unmarshal(b []byte, offset int) (n int, err error) {
@@ -832,6 +844,12 @@ func (self *HandlerRefer) Unmarshal(b []byte, offset int) (n int, err error) {
 	}
 	copy(self.SubType[:], b[n:])
 	n += len(self.SubType)
+
+	if len(b) < n+12{
+		err = parseErr("reserved 3*4", n+offset, err)
+		return
+	}
+	n += 12
 	self.Name = b[n:]
 	n += len(b[n:])
 	return
