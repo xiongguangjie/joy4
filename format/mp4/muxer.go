@@ -301,7 +301,7 @@ func (self *Muxer) WriteTrailer() (err error) {
 		PreferredRate:   1,
 		PreferredVolume: 1,
 		Matrix:          [9]int32{0x10000, 0, 0, 0, 0x10000, 0, 0, 0, 0x40000000},
-		NextTrackId:     2,
+		NextTrackId:     int32(len(self.streams) +1),
 	}
 
 	maxDur := time.Duration(0)
