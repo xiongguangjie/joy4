@@ -207,6 +207,12 @@ func (self SoundMediaInfo) Tag() Tag {
 
 const MDAT = Tag(0x6d646174)
 
+const FTYP = Tag(0x66747970)
+
+func (self Ftyp) Tag() Tag{
+	return FTYP
+}
+
 type Movie struct {
 	Header      *MovieHeader
 	MovieExtend *MovieExtend
@@ -3564,3 +3570,69 @@ func (self *TrackFragDecodeTime) Unmarshal(b []byte, offset int) (n int, err err
 func (self TrackFragDecodeTime) Children() (r []Atom) {
 	return
 }
+
+type Ftyp struct{
+	MajorBrand uint32
+	MinorVersion uint32
+	CompatibleBrands []uint32
+	AtomPos
+}
+
+func (self Ftyp) Marshal(b []byte)(n int){
+	pio.PutU32BE(b[4:], uint32(FTYP))
+	
+	n += self.marshal(b[8:]) + 8
+
+	pio.PutU32BE(b[0:], uint32(n))
+	return
+}
+
+func (self Ftyp) marshal(b []byte) (n int) {
+	pio.PutU32BE(b[n:],self.MajorBrand)
+	n += 4
+
+	pio.PutU32BE(b[n:],self.MinorVersion)
+	n += 4
+
+	for _,v := range self.CompatibleBrands{
+		pio.PutU32BE(b[n:],v)
+		n += 4
+	}
+	return
+}
+
+func (self Ftyp) Len() (n int) {
+	n += 8
+	n += 4
+	n += 4
+
+	if self.CompatibleBrands != nil && len(self.CompatibleBrands)>0{
+		n += 4*len(self.CompatibleBrands)
+	}
+	return
+}
+func (self *Ftyp) Unmarshal(b []byte, offset int) (n int, err error) {
+	(&self.AtomPos).setPos(offset, len(b))
+	n += 8
+
+
+	self.MajorBrand = pio.U32BE(b[n:])
+	n += 4
+
+	self.MinorVersion = pio.U32BE(b[n:])
+	n += 4
+
+	for{
+		if len(b[n:])<4{
+			break
+		}
+		self.CompatibleBrands = append(self.CompatibleBrands,pio.U32BE(b[n:]))
+		n += 4
+	}
+	return 
+
+}
+func (self Ftyp) Children() (r []Atom) {
+	return
+}
+

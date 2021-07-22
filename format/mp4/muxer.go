@@ -2,6 +2,7 @@ package mp4
 
 import (
 	"bufio"
+	"encoding/binary"
 	"fmt"
 	"github.com/nareix/joy4/av"
 	"github.com/nareix/joy4/codec/aacparser"
@@ -18,6 +19,8 @@ type Muxer struct {
 	bufw    *bufio.Writer
 	wpos    int64
 	streams []*Stream
+
+	ftyp mp4io.Ftyp
 }
 
 func NewMuxer(w io.WriteSeeker) *Muxer {
@@ -146,12 +149,40 @@ func (self *Stream) fillTrackAtom() (err error) {
 }
 
 func (self *Muxer) WriteHeader(streams []av.CodecData) (err error) {
+	var hasH264 = false
+
 	self.streams = []*Stream{}
 	for _, stream := range streams {
+		if stream.Type() == av.H264{
+			hasH264 = true
+		}
 		if err = self.newStream(stream); err != nil {
 			return
 		}
 	}
+
+	self.ftyp.MajorBrand = binary.BigEndian.Uint32([]byte{'i','s','o','m'})
+	self.ftyp.MinorVersion = 0x200
+	self.ftyp.CompatibleBrands = append(self.ftyp.CompatibleBrands,binary.BigEndian.Uint32([]byte{'i','s','o','m'}))
+	self.ftyp.CompatibleBrands = append(self.ftyp.CompatibleBrands,binary.BigEndian.Uint32([]byte{'i','s','o','2'}))
+	if hasH264{
+		self.ftyp.CompatibleBrands = append(self.ftyp.CompatibleBrands,binary.BigEndian.Uint32([]byte{'a','v','c','1'}))
+	}
+	self.ftyp.CompatibleBrands = append(self.ftyp.CompatibleBrands,binary.BigEndian.Uint32([]byte{'m','p','4','1'}))
+
+	ftyp := make([]byte,self.ftyp.Len())
+
+
+	ftyp_size := self.ftyp.Marshal(ftyp)
+
+	if len(ftyp) != ftyp_size{
+		return fmt.Errorf("ftyp size error len %d size %d ",len(ftyp),ftyp_size)
+	}
+	if _, err = self.w.Write(ftyp); err != nil {
+		return
+	}
+
+	self.wpos += int64(ftyp_size)
 
 	taghdr := make([]byte, 16)
 	pio.PutU32BE(taghdr, 1) // wide atom
@@ -292,12 +323,16 @@ func (self *Muxer) WriteTrailer() (err error) {
 	if err = self.bufw.Flush(); err != nil {
 		return
 	}
+	var ftypesize int64 = int64(self.ftyp.Len())
 
 	var mdatsize int64
 	if mdatsize, err = self.w.Seek(0, io.SeekCurrent); err != nil {
 		return
 	}
-	if _, err = self.w.Seek(8, io.SeekStart); err != nil {
+
+	mdatsize -= ftypesize
+
+	if _, err = self.w.Seek(8+ftypesize, io.SeekStart); err != nil {
 		return
 	}
 	taghdr := make([]byte, 8)
