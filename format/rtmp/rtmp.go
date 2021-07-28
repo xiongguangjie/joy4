@@ -353,7 +353,7 @@ var CodecTypes = flv.CodecTypes
 
 func (self *Conn) writeBasicConf() (err error) {
 	// > SetChunkSize
-	if err = self.writeSetChunkSize(1024 * 1024 * 128); err != nil {
+	if err = self.writeSetChunkSize(1024 * 1024 * 15); err != nil {
 		return
 	}
 	// > WindowAckSize
@@ -605,13 +605,15 @@ func (self *Conn) writeConnect(path string) (err error) {
 	if err = self.writeCommandMsg(3, 0, "connect", 1,
 		flvio.AMFMap{
 			"app":           path,
-			"flashVer":      "MAC 22,0,0,192",
+			"type":			 "nonprivate",
+			"flashVer":      "FMLE/3.0 (compatible; FMSc/1.0)",
 			"tcUrl":         getTcUrl(self.URL),
-			"fpad":          false,
-			"capabilities":  15,
-			"audioCodecs":   4071,
-			"videoCodecs":   252,
-			"videoFunction": 1,
+			"swfUrl":		 getTcUrl(self.URL),
+//			"fpad":          false,
+//			"capabilities":  15,
+//			"audioCodecs":   4071,
+//			"videoCodecs":   252,
+//			"videoFunction": 1,
 		},
 	); err != nil {
 		return
@@ -1009,7 +1011,7 @@ func (self *Conn) writeAVTag(tag flvio.Tag, ts int32) (err error) {
 	hdrlen := tag.FillHeader(b[actualChunkHeaderLength:])
 	self.fillChunkHeader(b, csid, ts, msgtypeid, self.avmsgsid, hdrlen+len(data))
 	n := hdrlen + actualChunkHeaderLength
-
+	
 	if n+len(data) > self.writeMaxChunkSize {
 		if err = self.writeSetChunkSize(n + len(data)); err != nil {
 			return
