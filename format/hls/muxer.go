@@ -5,7 +5,6 @@ import (
 	"os"
 	"fmt"
 	"bytes"
-	"path/filepath"
 	"github.com/nareix/joy4/av"
 	"github.com/nareix/joy4/format/ts"
 )
@@ -15,7 +14,6 @@ type Muxer struct{
 	mux     *ts.Muxer
 	streams []av.CodecData
 	shdr 	[]byte
-	dir 	string
 	vidx    int8
 	aidx 	int8
 	tsIdx 	uint
@@ -23,7 +21,9 @@ type Muxer struct{
 	curSegmentFirstDTS time.Duration
 	curVideoFrameNum int 
 	lastDTS time.Duration
-	m3u8filename string
+
+	onTS func (filename string,shdr,data []byte) error
+	onM3U8Append func (isFirst bool,append []byte) error
 	//tslistInfo []tsSegmentInfo
 }
 /*
@@ -43,13 +43,17 @@ func NewMuxer(Dir string,segDuration time.Duration) (*Muxer,error){
 	if os.IsNotExist(err) {
 		os.MkdirAll(Dir,os.ModePerm)
 	}
+	fileCtx := &hlsTSRecordCtx{
+		Dir:Dir,
+	}
+
 
 	return &Muxer{
-		dir:Dir,
 		vidx:-1,
 		aidx:-1,
-		m3u8filename:filepath.Join(Dir,"hls.m3u8"),
 		segDuration:segDuration,
+		onTS:fileCtx.onTS,
+		onM3U8Append:fileCtx.onM3U8Append,
 	},nil
 }
 
@@ -81,53 +85,33 @@ func (self *Muxer) WriteHeader(streams []av.CodecData) (err error) {
 
 func (self *Muxer) saveTS(newStartTime time.Duration) error{
 	fileName := fmt.Sprintf("%d.ts",self.tsIdx)
-	dst := filepath.Join(self.dir,fileName)
-	file , err := os.OpenFile(dst,os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
-	if err != nil{
-		return err
-	}
-	defer file.Close()
-
-	_,err = file.Write(self.shdr)
-	if err != nil{
-		os.Remove(dst)
-		return err
-	}
-	_,err = file.Write(self.buf.Bytes())
-	if err != nil{
-		os.Remove(dst)
-		return err
+	
+	if self.onTS != nil{
+		self.onTS(fileName,self.shdr,self.buf.Bytes())
 	}
 
-	// flush m3u8
+	var m3u8buf  = bytes.NewBuffer([]byte{})
 
 	if self.tsIdx == 0{
 		// first ts
-		m3u8file,err := os.OpenFile(self.m3u8filename,os.O_WRONLY|os.O_CREATE|os.O_TRUNC,0644)
-		if err != nil{
-			os.Remove(dst)
-			return err
-		}
-		fmt.Fprintf(m3u8file,"#EXTM3U\n")
-		fmt.Fprintf(m3u8file,"#EXT-X-PLAYLIST-TYPE:EVENT\n")
-		fmt.Fprintf(m3u8file,"#EXT-X-TARGETDURATION:10\n")
-		fmt.Fprintf(m3u8file,"#EXT-X-VERSION:4\n")
-		fmt.Fprintf(m3u8file,"#EXT-X-MEDIA-SEQUENCE:0\n")
+		fmt.Fprintf(m3u8buf,"#EXTM3U\n")
+		fmt.Fprintf(m3u8buf,"#EXT-X-PLAYLIST-TYPE:EVENT\n")
+		fmt.Fprintf(m3u8buf,"#EXT-X-TARGETDURATION:10\n")
+		fmt.Fprintf(m3u8buf,"#EXT-X-VERSION:4\n")
+		fmt.Fprintf(m3u8buf,"#EXT-X-MEDIA-SEQUENCE:0\n")
 
 		dur := float32(newStartTime - self.curSegmentFirstDTS)/float32(time.Second)
-		fmt.Fprintf(m3u8file,"#EXTINF:%.3f,\n%s\n",dur,fileName)
-
-		m3u8file.Close()
+		fmt.Fprintf(m3u8buf,"#EXTINF:%.3f,\n%s\n",dur,fileName)
 	}else{
-		m3u8file,err := os.OpenFile(self.m3u8filename,os.O_APPEND|os.O_WRONLY,0644)
-		if err != nil{
-			os.Remove(dst)
-			return err
-		}
+		
 		dur := float32(newStartTime - self.curSegmentFirstDTS)/float32(time.Second)
-		fmt.Fprintf(m3u8file,"#EXTINF:%.3f,\n%s\n",dur,fileName)
-		m3u8file.Close()
+		fmt.Fprintf(m3u8buf,"#EXTINF:%.3f,\n%s\n",dur,fileName)
 	}
+
+	if self.onM3U8Append != nil{
+		self.onM3U8Append(self.tsIdx == 0,m3u8buf.Bytes())
+	}
+	m3u8buf.Reset()
 	self.tsIdx++
 	/*
 	info := tsSegmentInfo{
@@ -187,11 +171,16 @@ func (self *Muxer) WriteTrailer() (err error) {
 	self.saveTS(self.lastDTS)
 	self.buf.Reset()
 
-	m3u8file,err := os.OpenFile(self.m3u8filename,os.O_APPEND|os.O_WRONLY,0644)
+	m3u8buf := bytes.NewBuffer([]byte{})
 	if err != nil{
 		fmt.Printf("hls muxer not ocur \n")
 	} 
-	fmt.Fprintf(m3u8file,"#EXT-X-ENDLIST\n")
-	m3u8file.Close()
+	fmt.Fprintf(m3u8buf,"#EXT-X-ENDLIST\n")
+
+	if self.onM3U8Append != nil{
+		self.onM3U8Append(self.tsIdx == 0,m3u8buf.Bytes())
+	}
+
+	m3u8buf.Reset()
 	return err
 }
