@@ -57,6 +57,22 @@ func NewMuxer(Dir string,segDuration time.Duration) (*Muxer,error){
 	},nil
 }
 
+func NewMuxerMinio(url string,segDuration time.Duration) (*Muxer,error){
+	minioCtx,err := newHLSMinioTSRecordCtx(url)
+	
+	if err != nil{
+		return nil,err
+	}
+
+	return &Muxer{
+		vidx:-1,
+		aidx:-1,
+		segDuration:segDuration,
+		onTS:minioCtx.onTS,
+		onM3U8Append:minioCtx.onM3U8Append,
+	},nil
+}
+
 func (self *Muxer) WriteHeader(streams []av.CodecData) (err error) {
 	self.buf.Reset()
 	self.mux = ts.NewMuxer(&self.buf)
