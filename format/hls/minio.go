@@ -29,7 +29,7 @@ func newHLSMinioTSRecordCtx(Url string)(*hlsMinioTSRecordCtx,error){
 	u, err := url.Parse(Url)
 
 	if err != nil {
-		log.Fatal(err)
+		log.Println("parser url failed:",err)
 		return nil,err
 	}
 
@@ -52,18 +52,21 @@ func newHLSMinioTSRecordCtx(Url string)(*hlsMinioTSRecordCtx,error){
     })
 
 	if err != nil{
+		log.Println("minio.New failed:",err)
 		return nil,err
 	}
 
 	found,err := minioClient.BucketExists(context.Background(),buketName)
 
 	if err != nil{
+		log.Println("BucketExists failed:",err)
 		return nil,err
 	}
 
 	if !found{
-		err = minioClient.MakeBucket(context.Background(),buketName,minio.MakeBucketOptions{ObjectLocking: true})
+		err = minioClient.MakeBucket(context.Background(),buketName,minio.MakeBucketOptions{Region: "us-east-1",ObjectLocking: false})
 		if err != nil{
+			log.Println("MakeBucket failed:",err)
 			return nil,err
 		}
 	}
