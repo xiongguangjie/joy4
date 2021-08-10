@@ -64,7 +64,7 @@ func newHLSMinioTSRecordCtx(Url string)(*hlsMinioTSRecordCtx,error){
 	}
 
 	if !found{
-		err = minioClient.MakeBucket(context.Background(),buketName,minio.MakeBucketOptions{Region: "us-east-1",ObjectLocking: false})
+		err = minioClient.MakeBucket(context.Background(),buketName,minio.MakeBucketOptions{ObjectLocking: false})
 		if err != nil{
 			log.Println("MakeBucket failed:",err)
 			return nil,err
