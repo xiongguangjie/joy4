@@ -85,8 +85,10 @@ func newHLSMinioTSRecordCtx(Url string)(*hlsMinioTSRecordCtx,error){
 func (ctx *hlsMinioTSRecordCtx) uploadToMinio(fileName string,data *bytes.Buffer) error{
 
 	buf := ctx.bufPool.Get().(*bytes.Buffer)
+	buf.Reset()
 	buf.Write(data.Bytes())
 	_, err := ctx.client.PutObject(context.Background(),ctx.bucket,ctx.dir+"/"+fileName,buf,int64(buf.Len()),minio.PutObjectOptions{})
+	buf.Reset()
 	ctx.bufPool.Put(buf)
 	return err
 }
