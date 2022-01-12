@@ -6,7 +6,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/hex"
+	_ "encoding/hex"
 	"fmt"
 	"github.com/nareix/joy4/av"
 	"github.com/nareix/joy4/av/avutil"
@@ -604,16 +604,16 @@ func (self *Conn) writeConnect(path string) (err error) {
 	}
 	if err = self.writeCommandMsg(3, 0, "connect", 1,
 		flvio.AMFMap{
-			"app":           path,
-			"type":			 "nonprivate",
-			"flashVer":      "FMLE/3.0 (compatible; FMSc/1.0)",
-			"tcUrl":         getTcUrl(self.URL),
-			"swfUrl":		 getTcUrl(self.URL),
-//			"fpad":          false,
-//			"capabilities":  15,
-//			"audioCodecs":   4071,
-//			"videoCodecs":   252,
-//			"videoFunction": 1,
+			"app":      path,
+			"type":     "nonprivate",
+			"flashVer": "FMLE/3.0 (compatible; FMSc/1.0)",
+			"tcUrl":    getTcUrl(self.URL),
+			"swfUrl":   getTcUrl(self.URL),
+			//			"fpad":          false,
+			//			"capabilities":  15,
+			//			"audioCodecs":   4071,
+			//			"videoCodecs":   252,
+			//			"videoFunction": 1,
 		},
 	); err != nil {
 		return
@@ -1011,7 +1011,7 @@ func (self *Conn) writeAVTag(tag flvio.Tag, ts int32) (err error) {
 	hdrlen := tag.FillHeader(b[actualChunkHeaderLength:])
 	self.fillChunkHeader(b, csid, ts, msgtypeid, self.avmsgsid, hdrlen+len(data))
 	n := hdrlen + actualChunkHeaderLength
-	
+
 	if n+len(data) > self.writeMaxChunkSize {
 		if err = self.writeSetChunkSize(n + len(data)); err != nil {
 			return
@@ -1126,7 +1126,7 @@ func (self *Conn) readChunk() (err error) {
 			return
 		}
 		n += 2
-		csid = uint32(pio.U16BE(b)) + 64
+		csid = uint32(pio.U16LE(b)) + 64
 	}
 
 	cs := self.readcsmap[csid]
@@ -1151,7 +1151,7 @@ func (self *Conn) readChunk() (err error) {
 		//
 		//       Figure 9 Chunk Message Header – Type 0
 		if cs.msgdataleft != 0 {
-			err = fmt.Errorf("rtmp: chunk msgdataleft=%d invalid", cs.msgdataleft)
+			err = fmt.Errorf("rtmp: fmt = 0 csid = %d  chunk msgdataleft=%d invalid", csid, cs.msgdataleft)
 			return
 		}
 		h := b[:11]
@@ -1188,7 +1188,7 @@ func (self *Conn) readChunk() (err error) {
 		//
 		//       Figure 10 Chunk Message Header – Type 1
 		if cs.msgdataleft != 0 {
-			err = fmt.Errorf("rtmp: chunk msgdataleft=%d invalid", cs.msgdataleft)
+			err = fmt.Errorf("rtmp: fmt = 1 csid = %d chunk msgdataleft=%d invalid", csid, cs.msgdataleft)
 			return
 		}
 		h := b[:7]
@@ -1223,7 +1223,7 @@ func (self *Conn) readChunk() (err error) {
 		//
 		//       Figure 11 Chunk Message Header – Type 2
 		if cs.msgdataleft != 0 {
-			err = fmt.Errorf("rtmp: chunk msgdataleft=%d invalid", cs.msgdataleft)
+			err = fmt.Errorf("rtmp: fmt = 2 csid = %d chunk msgdataleft=%d invalid", csid, cs.msgdataleft)
 			return
 		}
 		h := b[:3]
@@ -1299,7 +1299,7 @@ func (self *Conn) readChunk() (err error) {
 	if cs.msgdataleft == 0 {
 		if Debug {
 			fmt.Println("rtmp: chunk data")
-			fmt.Print(hex.Dump(cs.msgdata))
+			//fmt.Print(hex.Dump(cs.msgdata))
 		}
 
 		if err = self.handleMsg(cs.timenow, cs.msgsid, cs.msgtypeid, cs.msgdata); err != nil {
