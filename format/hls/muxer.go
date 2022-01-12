@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/nareix/joy4/av"
 	"github.com/nareix/joy4/format/ts"
+	"math"
 	"os"
 	"time"
 )
@@ -95,7 +96,7 @@ func (self *Muxer) WriteHeader(streams []av.CodecData) (err error) {
 	self.shdr = make([]byte, self.buf.Len())
 	copy(self.shdr, self.buf.Bytes())
 	self.buf.Reset()
-	self.curSegmentFirstDTS = -1
+	self.curSegmentFirstDTS = math.MinInt64
 	return nil
 }
 
@@ -162,6 +163,9 @@ func (self *Muxer) canFlushTs(pkt av.Packet) bool {
 }
 func (self *Muxer) WritePacket(pkt av.Packet) (err error) {
 
+	if self.curSegmentFirstDTS == math.MinInt64 {
+		self.curSegmentFirstDTS = pkt.Time
+	}
 	if self.canFlushTs(pkt) {
 		//can flush ts
 		err := self.saveTS(pkt.Time)
