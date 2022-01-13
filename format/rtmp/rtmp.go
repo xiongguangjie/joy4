@@ -180,6 +180,7 @@ type Conn struct {
 	avtag       flvio.Tag
 
 	eventtype uint16
+	streamidx uint32
 }
 
 type txrxcount struct {
@@ -244,12 +245,17 @@ const (
 	msgtypeidDataMsgAMF3      = 15
 	msgtypeidVideoMsg         = 9
 	msgtypeidAudioMsg         = 8
+	msgtypeidAggergateMsg     = 22
 )
 
 const (
 	eventtypeStreamBegin      = 0
 	eventtypeSetBufferLength  = 3
 	eventtypeStreamIsRecorded = 4
+	eventtypeStreamEof        = 1
+	eventtypeStreamDry        = 2
+	eventtypePingRequest      = 6
+	eventtypePingResponse     = 7
 )
 
 func (self *Conn) NetConn() net.Conn {
@@ -646,7 +652,7 @@ func (self *Conn) writeConnect(path string) (err error) {
 				if len(self.msgdata) == 4 {
 					self.readAckSize = pio.U32BE(self.msgdata)
 				}
-				if err = self.writeWindowAckSize(0xffffffff); err != nil {
+				if err = self.writeWindowAckSize(self.readAckSize); err != nil {
 					return
 				}
 			}
@@ -1049,6 +1055,18 @@ func (self *Conn) writeSetBufferLength(msgsid uint32, timestamp uint32) (err err
 	return
 }
 
+func (self *Conn) writeUserControl(event uint16, data uint32) (err error) {
+	b := self.tmpwbuf(chunkHeaderLength + 6)
+	n := self.fillChunkHeader(b, 2, 0, msgtypeidUserControl, 0, 6)
+
+	pio.PutU16BE(b[n:], event)
+	n += 2
+	pio.PutU32BE(b[n:], data)
+	n += 4
+	_, err = self.bufw.Write(b[:n])
+	return
+}
+
 const chunkHeaderLength = 12
 const FlvTimestampMax = 0xFFFFFF
 
@@ -1273,7 +1291,6 @@ func (self *Conn) readChunk() (err error) {
 			}
 			cs.Start()
 		}
-
 	default:
 		err = fmt.Errorf("rtmp: invalid chunk msg header type=%d", msghdrtype)
 		return
@@ -1292,7 +1309,7 @@ func (self *Conn) readChunk() (err error) {
 	cs.msgdataleft -= uint32(size)
 
 	if Debug {
-		fmt.Printf("rtmp: chunk msgsid=%d msgtypeid=%d msghdrtype=%d len=%d left=%d\n",
+		fmt.Printf("rtmp:fmt = %d csid = %d  chunk msgsid=%d msgtypeid=%d msghdrtype=%d len=%d left=%d\n", msghdrtype, csid,
 			cs.msgsid, cs.msgtypeid, cs.msghdrtype, cs.msgdatalen, cs.msgdataleft)
 	}
 
@@ -1359,6 +1376,74 @@ func (self *Conn) handleCommandMsgAMF0(b []byte) (n int, err error) {
 	self.gotcommand = true
 	return
 }
+func (self *Conn) handleUserControl(eventType uint16, data []byte) (err error) {
+	switch eventType {
+	case eventtypePingRequest:
+		if len(data) < 4 {
+			err = fmt.Errorf("rtmp: short packet of user control ping request")
+			return
+		}
+		ts := pio.U32BE(data)
+		//send response
+		self.writeUserControl(eventtypePingResponse, ts)
+		if Debug {
+			fmt.Println("rtmp : user control: eventtypePingRequest")
+		}
+	case eventtypePingResponse:
+		// ignore
+		if Debug {
+			fmt.Println("rtmp : user control: eventtypePingResponse")
+		}
+	case eventtypeSetBufferLength:
+		// ignore
+		if Debug {
+			fmt.Println("rtmp : user control: eventtypeSetBufferLength")
+		}
+	case eventtypeStreamBegin:
+		if len(data) < 4 {
+			err = fmt.Errorf("rtmp: short packet of user control stream begin")
+			return
+		}
+		self.streamidx = pio.U32BE(data)
+
+		if Debug {
+			fmt.Println("rtmp : user control: eventtypeStreamBegin idx = ", self.streamidx)
+		}
+	case eventtypeStreamDry:
+		if len(data) < 4 {
+			err = fmt.Errorf("rtmp: short packet of user control stream dry")
+			return
+		}
+		// ignore
+		idx := pio.U32BE(data)
+		if Debug {
+			fmt.Println("rtmp : user control: eventtypeStreamDry idx = ", idx)
+		}
+	case eventtypeStreamEof:
+		//ignore
+		if len(data) < 4 {
+			err = fmt.Errorf("rtmp: short packet of user control stream eof")
+			return
+		}
+		idx := pio.U32BE(data)
+		if Debug {
+			fmt.Println("rtmp : user control: eventtypeStreamEof idx = ", idx)
+		}
+	case eventtypeStreamIsRecorded:
+		//ignore
+		if len(data) < 4 {
+			err = fmt.Errorf("rtmp: short packet of user control stream is record")
+			return
+		}
+		idx := pio.U32BE(data)
+		if Debug {
+			fmt.Println("rtmp : user control: eventtypeStreamIsRecorded idx = ", idx)
+		}
+	default:
+		err = fmt.Errorf("rtmp: unsupport event type %d ", eventType)
+	}
+	return
+}
 
 func (self *Conn) handleMsg(timestamp uint32, msgsid uint32, msgtypeid uint8, msgdata []byte) (err error) {
 	self.msgdata = msgdata
@@ -1387,6 +1472,8 @@ func (self *Conn) handleMsg(timestamp uint32, msgsid uint32, msgtypeid uint8, ms
 			return
 		}
 		self.eventtype = pio.U16BE(msgdata)
+		err = self.handleUserControl(self.eventtype, msgdata[2:])
+		return
 
 	case msgtypeidDataMsgAMF0:
 		b := msgdata
@@ -1438,6 +1525,27 @@ func (self *Conn) handleMsg(timestamp uint32, msgsid uint32, msgtypeid uint8, ms
 			return
 		}
 		self.readMaxChunkSize = int(pio.U32BE(msgdata))
+		return
+	case msgtypeidAck:
+		if len(msgdata) < 4 {
+			err = fmt.Errorf("rtmp: short packet of MsgACK")
+			return
+		}
+		if Debug {
+			fmt.Println("rtmp : receive bytes : ", pio.U32BE(msgdata))
+		}
+		return
+	case msgtypeidSetPeerBandwidth:
+		if len(msgdata) < 5 {
+			err = fmt.Errorf("rtmp: short packet of SetPeerBandwidth")
+			return
+		}
+		if Debug {
+			fmt.Println("rtmp : set Peer Bandwidth  : ", pio.U32BE(msgdata), " type: ", pio.U8(msgdata[4:]))
+		}
+		return
+	case msgtypeidAggergateMsg:
+		err = fmt.Errorf("rtmp : unsupport rtmp aggergate msg")
 		return
 	}
 
