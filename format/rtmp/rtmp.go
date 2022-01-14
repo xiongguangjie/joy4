@@ -1266,31 +1266,50 @@ func (self *Conn) readChunk() (err error) {
 		cs.Start()
 
 	case 3:
-		if cs.msgdataleft == 0 {
-			switch cs.msghdrtype {
-			case 0:
-				if cs.hastimeext {
-					if _, err = io.ReadFull(self.bufr, b[:4]); err != nil {
-						return
-					}
-					n += 4
-					timestamp = pio.U32BE(b)
-					cs.timenow = timestamp
-				}
-			case 1, 2:
-				if cs.hastimeext {
-					if _, err = io.ReadFull(self.bufr, b[:4]); err != nil {
-						return
-					}
-					n += 4
-					timestamp = pio.U32BE(b)
-				} else {
-					timestamp = cs.timedelta
-				}
-				cs.timenow += timestamp
+		if cs.hastimeext {
+			if _, err = io.ReadFull(self.bufr, b[:4]); err != nil {
+				return
 			}
-			cs.Start()
+			n += 4
+			timestamp = pio.U32BE(b)
+			if cs.msgdataleft == 0 {
+				switch cs.msghdrtype {
+				case 0:
+					cs.timenow = timestamp
+				case 1, 2:
+					cs.timedelta = timestamp
+					cs.timenow += timestamp
+				}
+				cs.Start()
+			}
 		}
+		/*
+			if cs.msgdataleft == 0 {
+				switch cs.msghdrtype {
+				case 0:
+					if cs.hastimeext {
+						if _, err = io.ReadFull(self.bufr, b[:4]); err != nil {
+							return
+						}
+						n += 4
+						timestamp = pio.U32BE(b)
+						cs.timenow = timestamp
+					}
+				case 1, 2:
+					if cs.hastimeext {
+						if _, err = io.ReadFull(self.bufr, b[:4]); err != nil {
+							return
+						}
+						n += 4
+						timestamp = pio.U32BE(b)
+					} else {
+						timestamp = cs.timedelta
+					}
+					cs.timenow += timestamp
+				}
+				cs.Start()
+			}
+		*/
 	default:
 		err = fmt.Errorf("rtmp: invalid chunk msg header type=%d", msghdrtype)
 		return
